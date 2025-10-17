@@ -95,12 +95,24 @@ export async function processExcelFile(file: File): Promise<AnalysisResults> {
     for (let i = 10; i < jsonData.length; i++) {
       const row = jsonData[i]
 
+      // Verify that the column A has a valid number (student order number)
+      const studentNumber = row[0]?.toString().trim()
+      const isValidNumber = studentNumber && /^\d+$/.test(studentNumber)
+
       // Column B (index 1) - Student name
       const studentName = row[1]?.toString().trim()
+
+      // Only process if BOTH conditions are met: valid number in A AND valid name in B
+      if (!isValidNumber) {
+        console.log("[v0] Fila", i + 1, "ignorada: no tiene número de orden válido en columna A")
+        continue
+      }
 
       if (!isValidStudentName(studentName)) {
         if (studentName && studentName.length > 0) {
           console.log("[v0] Nombre inválido ignorado en fila", i + 1, ":", studentName)
+        } else {
+          console.log("[v0] Fila", i + 1, "ignorada: columna B vacía (sin nombre de estudiante)")
         }
         continue
       }

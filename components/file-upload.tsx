@@ -1,7 +1,8 @@
 "use client"
 
-import { useCallback } from "react"
-import { useDropzone } from "react-dropzone"
+import type React from "react"
+
+import { useCallback, useState, useRef } from "react"
 import { Upload, FileSpreadsheet } from "lucide-react"
 import { Button } from "@/components/ui/button"
 import { Card } from "@/components/ui/card"
@@ -15,11 +16,23 @@ interface FileUploadProps {
 }
 
 export function FileUpload({ onResults, isProcessing, setIsProcessing }: FileUploadProps) {
-  const onDrop = useCallback(
-    async (acceptedFiles: File[]) => {
-      if (acceptedFiles.length === 0) return
+  const [isDragActive, setIsDragActive] = useState(false)
+  const fileInputRef = useRef<HTMLInputElement>(null)
 
-      const file = acceptedFiles[0]
+  const handleFile = useCallback(
+    async (file: File) => {
+      if (!file) return
+
+      // Validate file type
+      const validTypes = [
+        "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+        "application/vnd.ms-excel",
+      ]
+      if (!validTypes.includes(file.type) && !file.name.match(/\.(xlsx|xls)$/i)) {
+        alert("Por favor, selecciona un archivo Excel válido (.xlsx o .xls)")
+        return
+      }
+
       setIsProcessing(true)
 
       try {
@@ -35,25 +48,80 @@ export function FileUpload({ onResults, isProcessing, setIsProcessing }: FileUpl
     [onResults, setIsProcessing],
   )
 
-  const { getRootProps, getInputProps, isDragActive } = useDropzone({
-    onDrop,
-    accept: {
-      "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet": [".xlsx"],
-      "application/vnd.ms-excel": [".xls"],
+  const handleDragEnter = useCallback(
+    (e: React.DragEvent) => {
+      e.preventDefault()
+      e.stopPropagation()
+      if (!isProcessing) {
+        setIsDragActive(true)
+      }
     },
-    maxFiles: 1,
-    disabled: isProcessing,
-  })
+    [isProcessing],
+  )
+
+  const handleDragLeave = useCallback((e: React.DragEvent) => {
+    e.preventDefault()
+    e.stopPropagation()
+    setIsDragActive(false)
+  }, [])
+
+  const handleDragOver = useCallback((e: React.DragEvent) => {
+    e.preventDefault()
+    e.stopPropagation()
+  }, [])
+
+  const handleDrop = useCallback(
+    (e: React.DragEvent) => {
+      e.preventDefault()
+      e.stopPropagation()
+      setIsDragActive(false)
+
+      if (isProcessing) return
+
+      const files = e.dataTransfer.files
+      if (files.length > 0) {
+        handleFile(files[0])
+      }
+    },
+    [isProcessing, handleFile],
+  )
+
+  const handleFileInputChange = useCallback(
+    (e: React.ChangeEvent<HTMLInputElement>) => {
+      const files = e.target.files
+      if (files && files.length > 0) {
+        handleFile(files[0])
+      }
+    },
+    [handleFile],
+  )
+
+  const handleClick = useCallback(() => {
+    if (!isProcessing && fileInputRef.current) {
+      fileInputRef.current.click()
+    }
+  }, [isProcessing])
 
   return (
     <Card className="overflow-hidden border-2 border-dashed transition-colors hover:border-primary/50">
       <div
-        {...getRootProps()}
+        onDragEnter={handleDragEnter}
+        onDragLeave={handleDragLeave}
+        onDragOver={handleDragOver}
+        onDrop={handleDrop}
+        onClick={handleClick}
         className={`cursor-pointer p-8 text-center transition-colors md:p-12 ${
           isDragActive ? "bg-primary/5" : "bg-card"
         } ${isProcessing ? "cursor-not-allowed opacity-50" : ""}`}
       >
-        <input {...getInputProps()} />
+        <input
+          ref={fileInputRef}
+          type="file"
+          accept=".xlsx,.xls,application/vnd.openxmlformats-officedocument.spreadsheetml.sheet,application/vnd.ms-excel"
+          onChange={handleFileInputChange}
+          disabled={isProcessing}
+          className="hidden"
+        />
 
         <div className="mx-auto mb-4 flex h-20 w-20 items-center justify-center rounded-full bg-primary/10">
           {isProcessing ? (
