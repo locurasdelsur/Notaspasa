@@ -1,81 +1,133 @@
 "use client"
 
 import { useState } from "react"
-import { FileUpload } from "@/components/file-upload"
-import { ResultsDisplay } from "@/components/results-display"
-import type { AnalysisResults } from "@/types/analysis"
-import { FileSpreadsheet } from "lucide-react"
-import Image from "next/image"
+import { Button } from "@/components/ui/button"
+import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card"
+import { Upload, FileSpreadsheet, Download } from "lucide-react"
+import { ExcelAnalyzer } from "@/components/excel-analyzer"
+import { AnalysisResults } from "@/components/analysis-results"
+import type { AnalysisData } from "@/lib/excel-processor"
 
 export default function Home() {
-  const [results, setResults] = useState<AnalysisResults | null>(null)
+  const [file, setFile] = useState<File | null>(null)
+  const [results, setResults] = useState<AnalysisData | null>(null)
   const [isProcessing, setIsProcessing] = useState(false)
 
+  const handleFileSelect = (selectedFile: File) => {
+    setFile(selectedFile)
+    setResults(null)
+  }
+
+  const handleAnalysisComplete = (data: AnalysisData) => {
+    setResults(data)
+    setIsProcessing(false)
+  }
+
+  const handleDownloadReport = () => {
+    if (!results) return
+
+    const reportText = generateTextReport(results)
+    const blob = new Blob([reportText], { type: "text/plain" })
+    const url = URL.createObjectURL(blob)
+    const a = document.createElement("a")
+    a.href = url
+    a.download = "reporte-analisis.txt"
+    a.click()
+    URL.revokeObjectURL(url)
+  }
+
+  const generateTextReport = (data: AnalysisData): string => {
+    let report = "REPORTE DE ANÁLISIS DE CALIFICACIONES\n"
+    report += "=".repeat(50) + "\n\n"
+
+    data.sheets.forEach((sheet) => {
+      report += `\nHOJA: ${sheet.sheetName}\n`
+      report += "-".repeat(50) + "\n"
+      report += `Total de estudiantes procesados: ${sheet.totalStudents}\n\n`
+
+      sheet.columns.forEach((col) => {
+        report += `\n${col.columnName}:\n`
+        report += `  - TODO TEA: ${col.todoTEA}\n`
+        report += `  - Hasta 5 materias TEP/TED: ${col.hasta5TEP}\n`
+        report += `  - 6 o más materias TEP/TED: ${col.mas5TEP}\n`
+      })
+      report += "\n"
+    })
+
+    return report
+  }
+
   return (
-    <main className="min-h-screen bg-gradient-to-br from-background via-accent/5 to-primary/5">
+    <main className="min-h-screen bg-gradient-to-br from-blue-50 via-indigo-50 to-purple-50 dark:from-gray-900 dark:via-gray-800 dark:to-gray-900">
       <div className="container mx-auto px-4 py-8 md:py-12">
-        <div className="mx-auto max-w-6xl">
-          <div className="mb-8 text-center md:mb-12">
-            <div className="mb-6 flex justify-center">
-              <div className="relative h-32 w-32 md:h-40 md:w-40">
-                <Image src="/logo-colegio.png" alt="E.E.S.T. Nº 6 Banfield" fill className="object-contain" priority />
+        <div className="max-w-6xl mx-auto space-y-8">
+          {/* Header */}
+          <div className="text-center space-y-4">
+            <div className="flex justify-center">
+              <div className="bg-primary/10 p-4 rounded-2xl">
+                <FileSpreadsheet className="w-12 h-12 text-primary" />
               </div>
             </div>
-            <h1 className="mb-2 text-balance text-3xl font-bold tracking-tight text-foreground md:text-4xl">
-              E.E.S.T. Nº 6 - Banfield
+            <h1 className="text-4xl md:text-5xl font-bold text-balance bg-gradient-to-r from-blue-600 to-purple-600 dark:from-blue-400 dark:to-purple-400 bg-clip-text text-transparent">
+              Analizador de Calificaciones Excel
             </h1>
-            <p className="mb-4 text-lg text-muted-foreground md:text-xl">Lomas de Zamora</p>
-            <div className="mx-auto mb-4 inline-flex items-center justify-center rounded-2xl bg-primary/10 p-3">
-              <FileSpreadsheet className="h-8 w-8 text-primary md:h-10 md:w-10" />
-            </div>
-            <h2 className="mb-3 text-balance text-2xl font-bold tracking-tight text-foreground md:text-3xl">
-              Analizador de Calificaciones
-            </h2>
-            <p className="text-pretty text-base text-muted-foreground md:text-lg">
-              Carga tu archivo Excel y obtén estadísticas detalladas de TEA, TEP y TED
+            <p className="text-lg text-muted-foreground max-w-2xl mx-auto text-pretty">
+              Carga tu planilla Excel y obtén un análisis automático de las calificaciones según las valoraciones TEA,
+              TEP y TED
             </p>
           </div>
 
-          {/* Upload Section */}
-          <div className="mb-8">
-            <FileUpload onResults={setResults} isProcessing={isProcessing} setIsProcessing={setIsProcessing} />
-          </div>
+          {/* Upload Card */}
+          <Card className="border-2 shadow-lg">
+            <CardHeader>
+              <CardTitle className="flex items-center gap-2">
+                <Upload className="w-5 h-5" />
+                Cargar Archivo Excel
+              </CardTitle>
+              <CardDescription>Selecciona un archivo .xlsx o .xls para analizar</CardDescription>
+            </CardHeader>
+            <CardContent>
+              <ExcelAnalyzer
+                onFileSelect={handleFileSelect}
+                onAnalysisComplete={handleAnalysisComplete}
+                onProcessingStart={() => setIsProcessing(true)}
+              />
+            </CardContent>
+          </Card>
 
-          {/* Results Section */}
-          {results && !isProcessing && <ResultsDisplay results={results} />}
-
-          {/* Info Section */}
-          {!results && !isProcessing && (
-            <div className="mt-12 rounded-xl border-2 border-primary/20 bg-card p-6 shadow-lg">
-              <h2 className="mb-4 text-xl font-semibold text-card-foreground">Instrucciones</h2>
-              <ul className="space-y-2 text-muted-foreground">
-                <li className="flex items-start gap-2">
-                  <span className="mt-1 flex h-5 w-5 shrink-0 items-center justify-center rounded-full bg-primary text-xs font-semibold text-primary-foreground">
-                    1
-                  </span>
-                  <span>Cada hoja del Excel representa una materia</span>
-                </li>
-                <li className="flex items-start gap-2">
-                  <span className="mt-1 flex h-5 w-5 shrink-0 items-center justify-center rounded-full bg-primary text-xs font-semibold text-primary-foreground">
-                    2
-                  </span>
-                  <span>Los nombres de alumnos deben estar en la columna B (desde fila 11)</span>
-                </li>
-                <li className="flex items-start gap-2">
-                  <span className="mt-1 flex h-5 w-5 shrink-0 items-center justify-center rounded-full bg-primary text-xs font-semibold text-primary-foreground">
-                    3
-                  </span>
-                  <span>Columna I: CALIFICACIÓN 1º CUATRIMESTRE</span>
-                </li>
-                <li className="flex items-start gap-2">
-                  <span className="mt-1 flex h-5 w-5 shrink-0 items-center justify-center rounded-full bg-primary text-xs font-semibold text-primary-foreground">
-                    4
-                  </span>
-                  <span>Columna Q: 2º VALORACIÓN PRELIMINAR</span>
-                </li>
-              </ul>
+          {/* Results */}
+          {results && (
+            <div className="space-y-4">
+              <div className="flex items-center justify-between">
+                <h2 className="text-2xl font-bold">Resultados del Análisis</h2>
+                <Button onClick={handleDownloadReport} variant="outline" className="gap-2 bg-transparent">
+                  <Download className="w-4 h-4" />
+                  Descargar Reporte
+                </Button>
+              </div>
+              <AnalysisResults data={results} />
             </div>
           )}
+
+          {/* Info Card */}
+          <Card className="bg-blue-50 dark:bg-blue-950/20 border-blue-200 dark:border-blue-900">
+            <CardHeader>
+              <CardTitle className="text-blue-900 dark:text-blue-300">Criterios de Análisis</CardTitle>
+            </CardHeader>
+            <CardContent className="text-sm text-blue-800 dark:text-blue-200 space-y-2">
+              <p>
+                <strong>TODO TEA:</strong> Estudiantes con calificación 7 o más en todas las materias
+              </p>
+              <p>
+                <strong>TEP/TED hasta 5:</strong> Estudiantes con hasta 5 materias con calificación menor a 7 (o CSA/CCA
+                para Diciembre/Febrero)
+              </p>
+              <p>
+                <strong>TEP/TED 6 o más:</strong> Estudiantes con 6 o más materias con calificación menor a 7 (o CSA/CCA
+                para Diciembre/Febrero)
+              </p>
+            </CardContent>
+          </Card>
         </div>
       </div>
     </main>

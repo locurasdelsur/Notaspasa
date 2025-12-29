@@ -1,223 +1,394 @@
 import * as XLSX from "xlsx"
-import type { AnalysisResults, StudentGrades } from "@/types/analysis"
 
-const EXCLUDED_TEXTS = [
+export interface ColumnAnalysis {
+  columnName: string
+  todoTEA: number
+  hasta5TEP: number
+  mas5TEP: number
+  todoTEAStudents: string[]
+  hasta5TEPStudents: string[]
+  mas5TEPStudents: string[]
+  hasta5TEPStudentsWithSubjects: Array<{ student: string; subjects: string[] }>
+  mas5TEPStudentsWithSubjects: Array<{ student: string; subjects: string[] }>
+}
+
+export interface SheetAnalysis {
+  sheetName: string
+  totalStudents: number
+  hasTallerGeneral: boolean
+  columns: ColumnAnalysis[]
+}
+
+export interface GeneralSummary {
+  columnName: string
+  todoTEA: number
+  hasta5TEP: number
+  mas5TEP: number
+  todoTEAStudents: string[]
+  hasta5TEPStudentsWithSubjects: Array<{ student: string; subjects: string[] }>
+  mas5TEPStudentsWithSubjects: Array<{ student: string; subjects: string[] }>
+}
+
+export interface AnalysisData {
+  generalSummary: GeneralSummary[]
+  sheets: SheetAnalysis[]
+}
+
+const EXCLUDED_SHEETS = [
+  "Lenguajes Tecnológicos I",
+  "Lenguajes Tecnológicos II",
+  "Lenguajes Tecnológicos III",
+  "Procedimientos Técnicos I",
+  "Procedimientos Técnicos II",
+  "Procedimientos Técnicos III",
+  "Sistemas Tecnológicos I",
+  "Sistemas Tecnológicos II",
+  "Sistemas Tecnológicos III",
+]
+
+const IGNORE_LABELS = [
   "TOTAL DE ESTUDIANTES",
   "APROBADAS/OS",
   "DESAPROBADAS/OS",
   "SIN EVALUAR",
   "TOTAL DE CLASES DE LA MATERIA",
   "CLASES EFECTIVAMENTE DADAS",
-  "TOTAL",
-  "APROBADO",
-  "DESAPROBADO",
 ]
 
-const EXCLUDED_SHEETS = [
-  "TALLER GENERAL",
-  "TALLERGENERAL",
-  "TALLER",
-  "RESUMEN",
-  "ESTADISTICAS",
-  "ESTADÍSTICA",
-  "SUMMARY",
-]
+const COLUMNS_TO_ANALYZE = {
+  J: { index: 9, name: "CALIFICACIÓN 1º CUATRIMESTRE", type: "preliminary" },
+  R: { index: 17, name: "CALIFICACIÓN 2º CUATRIMESTRE", type: "preliminary" },
+  U: { index: 20, name: "DICIEMBRE", type: "final" },
+  V: { index: 21, name: "FEBRERO", type: "final" },
+  W: { index: 22, name: "CALIFICACIÓN FINAL", type: "calification" },
+}
 
-function isValidStudentName(name: string): boolean {
-  if (!name || name.trim().length === 0) return false
+function normalizeString(str: string): string {
+  return str
+    .toLowerCase()
+    .normalize("NFD")
+    .replace(/[\u0300-\u036f]/g, "")
+    .trim()
+}
 
-  const upperName = name.toUpperCase().trim()
+function areNamesSimilar(name1: string, name2: string): boolean {
+  const norm1 = normalizeString(name1)
+  const norm2 = normalizeString(name2)
 
-  if (upperName.includes("PASE")) {
-    return false
+  // Check if one contains the other
+  if (norm1.includes(norm2) || norm2.includes(norm1)) return true
+
+  // Check Levenshtein distance for similar names
+  const distance = levenshteinDistance(norm1, norm2)
+  const maxLength = Math.max(norm1.length, norm2.length)
+  const similarity = 1 - distance / maxLength
+
+  return similarity > 0.8
+}
+
+function levenshteinDistance(str1: string, str2: string): number {
+  const matrix: number[][] = []
+
+  for (let i = 0; i <= str2.length; i++) {
+    matrix[i] = [i]
   }
 
-  // Check if the name contains any excluded text
-  for (const excluded of EXCLUDED_TEXTS) {
-    if (upperName.includes(excluded)) {
-      return false
+  for (let j = 0; j <= str1.length; j++) {
+    matrix[0][j] = j
+  }
+
+  for (let i = 1; i <= str2.length; i++) {
+    for (let j = 1; j <= str1.length; j++) {
+      if (str2.charAt(i - 1) === str1.charAt(j - 1)) {
+        matrix[i][j] = matrix[i - 1][j - 1]
+      } else {
+        matrix[i][j] = Math.min(matrix[i - 1][j - 1] + 1, matrix[i][j - 1] + 1, matrix[i - 1][j] + 1)
+      }
     }
   }
 
-  const trimmedName = name.trim()
-  if (trimmedName.length < 3) return false
-
-  // Must contain at least one letter (not just numbers or symbols)
-  if (!/[a-zA-ZáéíóúÁÉÍÓÚñÑ]/.test(trimmedName)) return false
-
-  // Should not be just numbers
-  if (/^\d+$/.test(trimmedName)) return false
-
-  return true
+  return matrix[str2.length][str1.length]
 }
 
-function shouldProcessSheet(sheetName: string): boolean {
-  if (!sheetName || sheetName.trim().length === 0) return false
+function shouldIgnoreRow(cellValue: any): boolean {
+  if (!cellValue) return false
+  const strValue = String(cellValue).toUpperCase().trim()
+  return IGNORE_LABELS.some((label) => strValue.includes(label))
+}
 
-  const normalizedSheetName = sheetName.toUpperCase().trim().replace(/\s+/g, " ") // Replace multiple spaces with single space
+function isGradeValid(value: any, columnType: string): boolean {
+  if (value === null || value === undefined || value === "") return false
 
-  console.log("[v0] Evaluando hoja:", sheetName, "->", normalizedSheetName)
+  const strValue = String(value).trim().toUpperCase()
 
-  for (const excluded of EXCLUDED_SHEETS) {
-    const normalizedExcluded = excluded.toUpperCase().trim()
-    if (normalizedSheetName.includes(normalizedExcluded) || normalizedSheetName === normalizedExcluded) {
-      console.log("[v0] Hoja excluida:", sheetName)
-      return false
+  // For final columns, check for CSA/CCA prefixes
+  if (columnType === "final") {
+    if (strValue.startsWith("CSA") || strValue.startsWith("CCA")) {
+      return true // This counts as TEP/TED
     }
   }
 
-  console.log("[v0] Hoja procesada:", sheetName)
-  return true
+  const numValue = Number.parseFloat(strValue)
+  return !isNaN(numValue)
 }
 
-export async function processExcelFile(file: File): Promise<AnalysisResults> {
-  const data = await file.arrayBuffer()
-  const workbook = XLSX.read(data, { type: "array" })
+function getNumericGrade(value: any): number | null {
+  if (value === null || value === undefined || value === "") return null
 
-  console.log("[v0] Total de hojas en el archivo:", workbook.SheetNames.length)
-  console.log("[v0] Nombres de hojas:", workbook.SheetNames)
+  const strValue = String(value).trim()
+  const numValue = Number.parseFloat(strValue)
 
-  const studentGrades: Map<string, StudentGrades> = new Map()
+  return isNaN(numValue) ? null : numValue
+}
 
-  const validSheets = workbook.SheetNames.filter(shouldProcessSheet)
-  const totalSubjects = validSheets.length
+function hasCSAorCCA(value: any): boolean {
+  if (value === null || value === undefined || value === "") return false
+  const strValue = String(value).trim().toUpperCase()
+  return strValue.startsWith("CSA") || strValue.startsWith("CCA")
+}
 
-  console.log("[v0] Hojas válidas a procesar:", validSheets.length, validSheets)
+export async function processExcelFile(file: File): Promise<AnalysisData> {
+  return new Promise((resolve, reject) => {
+    const reader = new FileReader()
 
-  for (const sheetName of validSheets) {
-    const worksheet = workbook.Sheets[sheetName]
-    const jsonData = XLSX.utils.sheet_to_json(worksheet, { header: 1 }) as any[][]
+    reader.onload = (e) => {
+      try {
+        const data = new Uint8Array(e.target?.result as ArrayBuffer)
+        const workbook = XLSX.read(data, { type: "array" })
 
-    console.log("[v0] Procesando hoja:", sheetName, "- Total de filas:", jsonData.length)
+        const hasTallerGeneral = workbook.SheetNames.some((name) => normalizeString(name).includes("taller general"))
 
-    // Start from row 11 (index 10)
-    let validStudentsInSheet = 0
-    for (let i = 10; i < jsonData.length; i++) {
-      const row = jsonData[i]
+        const allStudentsMap = new Map<string, Map<string, Map<number, any>>>()
 
-      // Verify that the column A has a valid number (student order number)
-      const studentNumber = row[0]?.toString().trim()
-      const isValidNumber = studentNumber && /^\d+$/.test(studentNumber)
-
-      // Column B (index 1) - Student name
-      const studentName = row[1]?.toString().trim()
-
-      // Only process if BOTH conditions are met: valid number in A AND valid name in B
-      if (!isValidNumber) {
-        console.log("[v0] Fila", i + 1, "ignorada: no tiene número de orden válido en columna A")
-        continue
-      }
-
-      if (!isValidStudentName(studentName)) {
-        if (studentName && studentName.length > 0) {
-          console.log("[v0] Nombre inválido ignorado en fila", i + 1, ":", studentName)
-        } else {
-          console.log("[v0] Fila", i + 1, "ignorada: columna B vacía (sin nombre de estudiante)")
-        }
-        continue
-      }
-
-      validStudentsInSheet++
-
-      // Column I (index 8) - First quarter grade
-      const firstQuarterGradeRaw = row[8]?.toString().trim().toUpperCase()
-      const firstQuarterGrade = !firstQuarterGradeRaw || firstQuarterGradeRaw === "" ? "TEA" : firstQuarterGradeRaw
-
-      // Column Q (index 16) - Second quarter grade
-      const secondQuarterGradeRaw = row[16]?.toString().trim().toUpperCase()
-      const secondQuarterGrade = !secondQuarterGradeRaw || secondQuarterGradeRaw === "" ? "TEA" : secondQuarterGradeRaw
-
-      // Initialize student if not exists
-      if (!studentGrades.has(studentName)) {
-        studentGrades.set(studentName, {
-          name: studentName,
-          firstQuarter: { TEA: 0, TEP: 0, TED: 0 },
-          secondQuarter: { TEA: 0, TEP: 0, TED: 0 },
+        const sheetsToProcess = workbook.SheetNames.filter((sn) => {
+          if (hasTallerGeneral && EXCLUDED_SHEETS.includes(sn)) return false
+          return true
         })
-      }
 
-      const student = studentGrades.get(studentName)!
+        for (const sheetName of sheetsToProcess) {
+          const worksheet = workbook.Sheets[sheetName]
+          const jsonData: any[][] = XLSX.utils.sheet_to_json(worksheet, {
+            header: 1,
+            defval: null,
+            raw: false,
+          })
 
-      // Count grades for first quarter
-      if (firstQuarterGrade === "TEA") {
-        student.firstQuarter.TEA++
-      } else if (firstQuarterGrade === "TEP") {
-        student.firstQuarter.TEP++
-      } else if (firstQuarterGrade === "TED") {
-        student.firstQuarter.TED++
-      }
+          for (let rowIndex = 10; rowIndex < jsonData.length; rowIndex++) {
+            const row = jsonData[rowIndex]
+            const studentName = row[1] // Column B
 
-      // Count grades for second quarter
-      if (secondQuarterGrade === "TEA") {
-        student.secondQuarter.TEA++
-      } else if (secondQuarterGrade === "TEP") {
-        student.secondQuarter.TEP++
-      } else if (secondQuarterGrade === "TED") {
-        student.secondQuarter.TED++
+            if (!studentName || shouldIgnoreRow(studentName)) continue
+
+            // Check if this name is similar to existing students
+            let matchingName: string | null = null
+            for (const existingName of allStudentsMap.keys()) {
+              if (areNamesSimilar(String(studentName), existingName)) {
+                matchingName = existingName
+                break
+              }
+            }
+
+            const nameToUse = matchingName || String(studentName)
+
+            if (!allStudentsMap.has(nameToUse)) {
+              allStudentsMap.set(nameToUse, new Map())
+            }
+
+            const studentSheets = allStudentsMap.get(nameToUse)!
+            if (!studentSheets.has(sheetName)) {
+              studentSheets.set(sheetName, new Map())
+            }
+
+            const sheetData = studentSheets.get(sheetName)!
+            for (const [colKey, colInfo] of Object.entries(COLUMNS_TO_ANALYZE)) {
+              const grade = row[colInfo.index]
+              sheetData.set(colInfo.index, grade)
+            }
+          }
+        }
+
+        const generalSummary: GeneralSummary[] = []
+
+        for (const [colKey, colInfo] of Object.entries(COLUMNS_TO_ANALYZE)) {
+          let todoTEA = 0
+          let hasta5TEP = 0
+          let mas5TEP = 0
+          const todoTEAStudents: string[] = []
+          const hasta5TEPStudentsWithSubjects: Array<{ student: string; subjects: string[] }> = []
+          const mas5TEPStudentsWithSubjects: Array<{ student: string; subjects: string[] }> = []
+
+          for (const [studentName, sheets] of allStudentsMap.entries()) {
+            let tepTedCount = 0
+            const subjectsWithTEP: string[] = []
+
+            for (const [sheetName, grades] of sheets.entries()) {
+              const grade = grades.get(colInfo.index)
+
+              if (isGradeValid(grade, colInfo.type)) {
+                let isTEP = false
+
+                if (colInfo.type === "final") {
+                  if (hasCSAorCCA(grade)) {
+                    isTEP = true
+                  } else {
+                    const numGrade = getNumericGrade(grade)
+                    if (numGrade !== null && numGrade < 7) {
+                      isTEP = true
+                    }
+                  }
+                } else {
+                  const numGrade = getNumericGrade(grade)
+                  if (numGrade !== null && numGrade < 7) {
+                    isTEP = true
+                  }
+                }
+
+                if (isTEP) {
+                  tepTedCount++
+                  subjectsWithTEP.push(sheetName)
+                }
+              }
+            }
+
+            if (tepTedCount === 0) {
+              todoTEA++
+              todoTEAStudents.push(studentName)
+            } else if (tepTedCount <= 5) {
+              hasta5TEP++
+              hasta5TEPStudentsWithSubjects.push({ student: studentName, subjects: subjectsWithTEP })
+            } else {
+              mas5TEP++
+              mas5TEPStudentsWithSubjects.push({ student: studentName, subjects: subjectsWithTEP })
+            }
+          }
+
+          generalSummary.push({
+            columnName: colInfo.name,
+            todoTEA,
+            hasta5TEP,
+            mas5TEP,
+            todoTEAStudents,
+            hasta5TEPStudentsWithSubjects,
+            mas5TEPStudentsWithSubjects,
+          })
+        }
+
+        const results: SheetAnalysis[] = []
+
+        for (const sheetName of sheetsToProcess) {
+          const worksheet = workbook.Sheets[sheetName]
+          const jsonData: any[][] = XLSX.utils.sheet_to_json(worksheet, {
+            header: 1,
+            defval: null,
+            raw: false,
+          })
+
+          const students: Map<string, Map<number, any>> = new Map()
+
+          for (let rowIndex = 10; rowIndex < jsonData.length; rowIndex++) {
+            const row = jsonData[rowIndex]
+            const studentName = row[1]
+
+            if (!studentName || shouldIgnoreRow(studentName)) continue
+
+            let matchingName: string | null = null
+            for (const existingName of students.keys()) {
+              if (areNamesSimilar(String(studentName), existingName)) {
+                matchingName = existingName
+                break
+              }
+            }
+
+            const nameToUse = matchingName || String(studentName)
+
+            if (!students.has(nameToUse)) {
+              students.set(nameToUse, new Map())
+            }
+
+            const studentData = students.get(nameToUse)!
+            for (const [colKey, colInfo] of Object.entries(COLUMNS_TO_ANALYZE)) {
+              const grade = row[colInfo.index]
+              studentData.set(colInfo.index, grade)
+            }
+          }
+
+          const columnAnalyses: ColumnAnalysis[] = []
+
+          for (const [colKey, colInfo] of Object.entries(COLUMNS_TO_ANALYZE)) {
+            let todoTEA = 0
+            let hasta5TEP = 0
+            const mas5TEP = 0
+            const todoTEAStudents: string[] = []
+            const hasta5TEPStudents: string[] = []
+            const mas5TEPStudents: string[] = []
+            const hasta5TEPStudentsWithSubjects: Array<{ student: string; subjects: string[] }> = []
+            const mas5TEPStudentsWithSubjects: Array<{ student: string; subjects: string[] }> = []
+
+            for (const [studentName, grades] of students.entries()) {
+              const grade = grades.get(colInfo.index)
+
+              if (isGradeValid(grade, colInfo.type)) {
+                let isTEP = false
+
+                if (colInfo.type === "final") {
+                  if (hasCSAorCCA(grade)) {
+                    isTEP = true
+                  } else {
+                    const numGrade = getNumericGrade(grade)
+                    if (numGrade !== null && numGrade < 7) {
+                      isTEP = true
+                    }
+                  }
+                } else {
+                  const numGrade = getNumericGrade(grade)
+                  if (numGrade !== null && numGrade < 7) {
+                    isTEP = true
+                  }
+                }
+
+                if (isTEP) {
+                  hasta5TEP++
+                  hasta5TEPStudents.push(studentName)
+                  hasta5TEPStudentsWithSubjects.push({ student: studentName, subjects: [sheetName] })
+                } else {
+                  todoTEA++
+                  todoTEAStudents.push(studentName)
+                }
+              }
+            }
+
+            columnAnalyses.push({
+              columnName: colInfo.name,
+              todoTEA,
+              hasta5TEP,
+              mas5TEP,
+              todoTEAStudents,
+              hasta5TEPStudents,
+              mas5TEPStudents,
+              hasta5TEPStudentsWithSubjects,
+              mas5TEPStudentsWithSubjects,
+            })
+          }
+
+          results.push({
+            sheetName,
+            totalStudents: students.size,
+            hasTallerGeneral,
+            columns: columnAnalyses,
+          })
+        }
+
+        resolve({ generalSummary, sheets: results })
+      } catch (error) {
+        console.error("[v0] Error parsing Excel file:", error)
+        reject(new Error("Error al procesar el archivo Excel"))
       }
     }
 
-    console.log("[v0] Estudiantes válidos encontrados en", sheetName, ":", validStudentsInSheet)
-  }
-
-  console.log("[v0] Total de estudiantes únicos:", studentGrades.size)
-
-  // Calculate statistics
-  const results: AnalysisResults = {
-    totalStudents: studentGrades.size,
-    totalSubjects,
-    firstQuarter: {
-      allTEA: 0,
-      allTEAStudents: [],
-      upTo5TEPTЕД: 0,
-      upTo5TEPTEDStudents: [],
-      sixOrMoreTEPTED: 0,
-      sixOrMoreTEPTEDStudents: [],
-    },
-    secondQuarter: {
-      allTEA: 0,
-      allTEAStudents: [],
-      upTo5TEPTЕД: 0,
-      upTo5TEPTEDStudents: [],
-      sixOrMoreTEPTED: 0,
-      sixOrMoreTEPTEDStudents: [],
-    },
-  }
-
-  // Analyze each student
-  for (const student of studentGrades.values()) {
-    // First Quarter Analysis
-    const firstTEPTED = student.firstQuarter.TEP + student.firstQuarter.TED
-    const firstTotalGrades = student.firstQuarter.TEA + firstTEPTED
-
-    if (firstTotalGrades === totalSubjects && student.firstQuarter.TEA === totalSubjects) {
-      results.firstQuarter.allTEA++
-      results.firstQuarter.allTEAStudents.push(student.name)
-    } else if (firstTEPTED >= 1 && firstTEPTED <= 5) {
-      results.firstQuarter.upTo5TEPTЕД++
-      results.firstQuarter.upTo5TEPTEDStudents.push(student.name)
-    } else if (firstTEPTED >= 6) {
-      results.firstQuarter.sixOrMoreTEPTED++
-      results.firstQuarter.sixOrMoreTEPTEDStudents.push(student.name)
+    reader.onerror = () => {
+      reject(new Error("Error al leer el archivo"))
     }
 
-    // Second Quarter Analysis
-    const secondTEPTED = student.secondQuarter.TEP + student.secondQuarter.TED
-    const secondTotalGrades = student.secondQuarter.TEA + secondTEPTED
-
-    if (secondTotalGrades === totalSubjects && student.secondQuarter.TEA === totalSubjects) {
-      results.secondQuarter.allTEA++
-      results.secondQuarter.allTEAStudents.push(student.name)
-    } else if (secondTEPTED >= 1 && secondTEPTED <= 5) {
-      results.secondQuarter.upTo5TEPTЕД++
-      results.secondQuarter.upTo5TEPTEDStudents.push(student.name)
-    } else if (secondTEPTED >= 6) {
-      results.secondQuarter.sixOrMoreTEPTED++
-      results.secondQuarter.sixOrMoreTEPTEDStudents.push(student.name)
-    }
-  }
-
-  console.log("[v0] Resultados finales:", results)
-
-  return results
+    reader.readAsArrayBuffer(file)
+  })
 }
