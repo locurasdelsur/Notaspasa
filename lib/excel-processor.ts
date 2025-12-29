@@ -56,11 +56,11 @@ const IGNORE_LABELS = [
 ]
 
 const COLUMNS_TO_ANALYZE = {
-  J: { index: 9, name: "CALIFICACIÓN 1º CUATRIMESTRE", type: "preliminary" },
-  R: { index: 17, name: "CALIFICACIÓN 2º CUATRIMESTRE", type: "preliminary" },
-  U: { index: 20, name: "DICIEMBRE", type: "final" },
-  V: { index: 21, name: "FEBRERO", type: "final" },
-  W: { index: 22, name: "CALIFICACIÓN FINAL", type: "calification" },
+  J: { index: 9, name: "CALIFICACIÓN 1º CUATRIMESTRE", type: "preliminary", tallerGeneralIndex: 3 }, // D in Taller General
+  R: { index: 17, name: "CALIFICACIÓN 2º CUATRIMESTRE", type: "preliminary", tallerGeneralIndex: 5 }, // F in Taller General
+  U: { index: 20, name: "DICIEMBRE", type: "final", tallerGeneralIndex: 8 }, // I in Taller General
+  V: { index: 21, name: "FEBRERO", type: "final", tallerGeneralIndex: 9 }, // J in Taller General
+  W: { index: 22, name: "CALIFICACIÓN FINAL", type: "calification", tallerGeneralIndex: 10 }, // K in Taller General
 }
 
 function normalizeString(str: string): string {
@@ -141,9 +141,14 @@ function getNumericGrade(value: any): number | null {
   return isNaN(numValue) ? null : numValue
 }
 
-function hasCSAorCCA(value: any): boolean {
+function hasCSAorCCA(value: any, isTallerGeneral = false): boolean {
   if (value === null || value === undefined || value === "") return false
   const strValue = String(value).trim().toUpperCase()
+
+  if (isTallerGeneral) {
+    return strValue.startsWith("CI")
+  }
+
   return strValue.startsWith("CSA") || strValue.startsWith("CCA")
 }
 
@@ -161,9 +166,20 @@ export async function processExcelFile(file: File): Promise<AnalysisData> {
         const allStudentsMap = new Map<string, Map<string, Map<number, any>>>()
 
         const sheetsToProcess = workbook.SheetNames.filter((sn) => {
-          if (hasTallerGeneral && EXCLUDED_SHEETS.includes(sn)) return false
+          // If Taller General exists, exclude the 9 specific subjects
+          if (hasTallerGeneral) {
+            const normalizedName = normalizeString(sn)
+            const shouldExclude = EXCLUDED_SHEETS.some((excluded) => normalizedName === normalizeString(excluded))
+            if (shouldExclude) {
+              console.log("[v0] Excluding sheet:", sn, "because Taller General exists")
+              return false
+            }
+          }
           return true
         })
+
+        console.log("[v0] Has Taller General:", hasTallerGeneral)
+        console.log("[v0] Sheets to process:", sheetsToProcess)
 
         for (const sheetName of sheetsToProcess) {
           const worksheet = workbook.Sheets[sheetName]
@@ -173,13 +189,14 @@ export async function processExcelFile(file: File): Promise<AnalysisData> {
             raw: false,
           })
 
+          const isTallerGeneralSheet = normalizeString(sheetName).includes("taller general")
+
           for (let rowIndex = 10; rowIndex < jsonData.length; rowIndex++) {
             const row = jsonData[rowIndex]
             const studentName = row[1] // Column B
 
             if (!studentName || shouldIgnoreRow(studentName)) continue
 
-            // Check if this name is similar to existing students
             let matchingName: string | null = null
             for (const existingName of allStudentsMap.keys()) {
               if (areNamesSimilar(String(studentName), existingName)) {
@@ -201,7 +218,8 @@ export async function processExcelFile(file: File): Promise<AnalysisData> {
 
             const sheetData = studentSheets.get(sheetName)!
             for (const [colKey, colInfo] of Object.entries(COLUMNS_TO_ANALYZE)) {
-              const grade = row[colInfo.index]
+              const columnIndex = isTallerGeneralSheet ? colInfo.tallerGeneralIndex : colInfo.index
+              const grade = row[columnIndex]
               sheetData.set(colInfo.index, grade)
             }
           }
@@ -223,16 +241,17 @@ export async function processExcelFile(file: File): Promise<AnalysisData> {
 
             for (const [sheetName, grades] of sheets.entries()) {
               const grade = grades.get(colInfo.index)
+              const isTallerGeneralSheet = normalizeString(sheetName).includes("taller general")
 
               if (isGradeValid(grade, colInfo.type)) {
                 let isTEP = false
 
-                if (colInfo.type === "final") {
-                  if (hasCSAorCCA(grade)) {
+                if (colInfo.type === "final" || colInfo.type === "calification") {
+                  if (hasCSAorCCA(grade, isTallerGeneralSheet)) {
                     isTEP = true
                   } else {
                     const numGrade = getNumericGrade(grade)
-                    if (numGrade !== null && numGrade < 7) {
+                    if (numGrade !== null && numGrade < 4) {
                       isTEP = true
                     }
                   }
@@ -283,6 +302,8 @@ export async function processExcelFile(file: File): Promise<AnalysisData> {
             raw: false,
           })
 
+          const isTallerGeneralSheet = normalizeString(sheetName).includes("taller general")
+
           const students: Map<string, Map<number, any>> = new Map()
 
           for (let rowIndex = 10; rowIndex < jsonData.length; rowIndex++) {
@@ -307,7 +328,8 @@ export async function processExcelFile(file: File): Promise<AnalysisData> {
 
             const studentData = students.get(nameToUse)!
             for (const [colKey, colInfo] of Object.entries(COLUMNS_TO_ANALYZE)) {
-              const grade = row[colInfo.index]
+              const columnIndex = isTallerGeneralSheet ? colInfo.tallerGeneralIndex : colInfo.index
+              const grade = row[columnIndex]
               studentData.set(colInfo.index, grade)
             }
           }
@@ -330,12 +352,12 @@ export async function processExcelFile(file: File): Promise<AnalysisData> {
               if (isGradeValid(grade, colInfo.type)) {
                 let isTEP = false
 
-                if (colInfo.type === "final") {
-                  if (hasCSAorCCA(grade)) {
+                if (colInfo.type === "final" || colInfo.type === "calification") {
+                  if (hasCSAorCCA(grade, isTallerGeneralSheet)) {
                     isTEP = true
                   } else {
                     const numGrade = getNumericGrade(grade)
-                    if (numGrade !== null && numGrade < 7) {
+                    if (numGrade !== null && numGrade < 4) {
                       isTEP = true
                     }
                   }
